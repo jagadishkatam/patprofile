@@ -1,0 +1,51 @@
+---
+title: "Patient Profile of `r params$subject` " 
+format: pdf
+editor: visual
+css: styles.css
+tbl-colwidths: [60,40]
+execute:
+  echo: false
+  warning: false
+  message: false
+params: 
+  subject: '01-701-1023'
+---
+
+```{r}
+
+library(tidyCDISC)
+library(tidyverse)
+library(knitr)
+data <- tidyCDISC::adsl %>% rename_all(tolower) %>% 
+  select(usubjid, trt01p, age, sex, race, heightbl, weightbl,rfstdtc, rfendtc) %>% 
+  filter(usubjid == params$subject)
+
+adae <- tidyCDISC::adae %>% rename_all(tolower) %>% 
+  select(usubjid,aedecod, astdt, aendt, aesev, aerel, aeout) %>% 
+  filter(usubjid == params$subject)
+```
+
+| Company Name                                                                                    Subject: `r data$usubjid`
+| 
+| Sex: `r data$sex`                                                                               First Dose date: `r data$rfstdtc`
+| Race: `r data$race`
+| Age: `r data$age` Last Dose date: `r data$rfendtc`
+| 
+| 
+
+#### Demographics {.test}
+
+```{r}
+#| echo: false
+
+kable(data %>% select(-usubjid))
+```
+
+#### Adverse Events {.test}
+
+```{r}
+#| echo: false
+
+kable(adae %>% select(-usubjid), align = 'l')
+```
