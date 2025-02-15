@@ -16,8 +16,17 @@ library(timevis)
 library(rlang)
 library(plotly)
 library(RColorBrewer)
+library(shinyFiles)
+library(bslib) 
 
-data('adae', package = 'tidyCDISC')
+preloaded_data <- list(
+  'adsl' = tidyCDISC::adsl,
+  'adae' = tidyCDISC::adae,
+  'adlbc' = tidyCDISC::adlbc,
+  'advs' = tidyCDISC::advs
+)
+
+adae <- preloaded_data$adae
 
 adae <- adae %>% rename_all(tolower) %>% 
   mutate(astdt=as.Date(astdt, format='%d%B%Y'),trtsdt=as.Date(trtsdt, format='%d%B%Y'),trtedt=as.Date(trtedt, format='%d%B%Y'), 
@@ -27,18 +36,18 @@ adae <- adae %>% rename_all(tolower) %>%
 
 usubjid <- unique(adae$usubjid)
 
-data('adsl', package = 'tidyCDISC')
+adsl <- preloaded_data$adsl
 
 adsl2 <- adsl %>% rename_all(tolower) %>% mutate(id=row_number())
 
 adae <- adae %>% filter(!is.na(start)) %>% mutate(id=row_number()) %>% filter(id<=1000)
 
-data('advs', package = 'tidyCDISC')
+advs <- preloaded_data$advs
 advs <- advs %>% rename_all(tolower) %>% filter(anl01fl=='Y')
 
 parvs <- unique(advs$param)
 
-data('adlbc', package = 'tidyCDISC')
+adlbc <- preloaded_data$adlbc
 adlbc <- adlbc %>% rename_all(tolower) 
 
 parlb <- unique(adlbc$param)
@@ -46,27 +55,23 @@ parlb <- unique(adlbc$param)
 
 # Define UI for application that draws a histogram
 ui <- fluidPage(
-
+  theme = bs_theme(bootswatch = "flatly" ),
     # Application title
     titlePanel("Patient Profile"),
 
     # Sidebar with a slider input for number of bins 
     sidebarLayout(
         sidebarPanel(
-          # Checkbox group to select multiple datasets
-          checkboxGroupInput("selected_dfs", "Choose Datasets:", 
-                             choices = c("ADVS" = "advs", "ADSL2" = "adsl2", "ADAE" = "adae"),
-                             selected = "advs"),  # Default selection
-            selectInput("subj",
-                        "Please Select a USUBJID",
-                        choices = usubjid,
-                        selected = usubjid[1])
+          fileInput("sas_files", "Upload SAS Files", multiple = TRUE, accept = c(".sas7bdat")),
+          uiOutput("datasetSelector") ,  # Dynamically generated checkboxes for datasets
+          uiOutput("subjSelector")  # Dynamic subject selection
         ),
 
         # Show a plot of the generated distribution
         mainPanel(
           tabsetPanel(
             id = 'dataset',
+            tabPanel("Data View", DTOutput("dataTable")),
             tabPanel("ADSL", 
                      varSelectInput("variables", "Variable:", NULL, multiple = TRUE), 
                      DTOutput("dataset1")),
@@ -92,7 +97,7 @@ ui <- fluidPage(
                               tags$div(selectInput('para', 'Parameter', choices = parvs, selected = parvs[[1]]), style="display:inline-block"), 
                               tags$div(selectInput('yaxis', 'Analysis Y Variable', choices = list('aval','chg', 'pchg')), style="display:inline-block") ,
                               tags$div(selectInput('xaxis', 'Analysis X Variable', choices = list('ady','visit', 'avisit')), style="display:inline-block"),
-                              tags$div(checkboxInput("chkb", "Baseline", FALSE), style="display:inline-block"),
+                              tags$div(checkboxInput("vchkb", tags$span("Baseline", style = "font-weight: bold; color: red;"), FALSE), style="display:inline-block"),
                               plotlyOutput("plot2")
                      )),
                      
@@ -109,7 +114,7 @@ ui <- fluidPage(
                                      tags$div(selectInput('lpara', 'Parameter', choices = parlb, selected = parlb[[1]]), style="display:inline-block"), 
                                      tags$div(selectInput('lyaxis', 'Analysis Y Variable', choices = list('aval','chg')), style="display:inline-block") ,
                                      tags$div(selectInput('lxaxis', 'Analysis X Variable', choices = list('ady','visit', 'avisit')), style="display:inline-block"),
-                                     tags$div(checkboxInput("chkb", "Baseline", FALSE), style="display:inline-block"),
+                                     tags$div(checkboxInput("lchkb", tags$span("Baseline", style = "font-weight: bold; color: red;"), FALSE), style="display:inline-block"),
                                      plotlyOutput("plot3")
                               )),
                      
@@ -127,8 +132,80 @@ ui <- fluidPage(
 
 # Define server logic required to draw a histogram
 server <- function(input, output, session) {
+  
+ 
+  # 🔹 Reactive Storage for Datasets (Initially Preloaded)
+  data_storage <- reactiveVal(preloaded_data)
+  
+  # 🔹 Handle File Uploads and Merge with Existing Datasets
+  observeEvent(input$sas_files, {
+    req(input$sas_files)
+    
+    files <- input$sas_files$datapath
+    names(files) <- tools::file_path_sans_ext(input$sas_files$name)  # Extract file names without .sas7bdat
+    
+    uploaded_data <- lapply(files, haven::read_sas)  # Read all uploaded files
+    names(uploaded_data) <- names(files)  # Assign dataset names
+    
+    updated_data <- data_storage()  # Get existing datasets
+    updated_data[names(uploaded_data)] <- uploaded_data  # Replace matching datasets
+    
+    data_storage(updated_data)  # Update reactive storage
+    
+    # 🔹 Force UI Refresh (Important!)
+    updateCheckboxGroupInput(session, "selectedDataset",
+                             choices = names(updated_data),
+                             selected = names(updated_data))
+  })
+  
+  # 🔹 Dynamic Checkboxes for Selecting Datasets
+  output$datasetSelector <- renderUI({
+    req(data_storage())
+    checkboxGroupInput("selectedDataset", "Select Datasets:", 
+                       choices = names(data_storage()), 
+                       selected = names(data_storage()))  # Auto-select all available datasets
+  })
+  
+  # 🔹 Reactive Expression for Selected Dataset
+  selected_data <- reactive({
+    req(input$selectedDataset)
+    data_storage()[['adsl']]  # Get first selected dataset
+  })
+  
+  # 🔹 Update USUBJID Dropdown When Dataset Changes
+  observeEvent(selected_data(), {
+    req(selected_data())
+    
+    # Extract unique USUBJID values
+    usubjid_list <- unique(selected_data()$USUBJID)
+    
+    updateSelectInput(session, "subj",
+                      choices = usubjid_list,
+                      selected = usubjid_list[1])
+  })
+  
+  # 🔹 UI for Subject Selection
+  output$subjSelector <- renderUI({
+    req(selected_data())
+    selectInput("subj", "Please Select a USUBJID",
+                choices = unique(selected_data()$USUBJID))
+  })
+  
+  # 🔹 Display First Selected Dataset in Data View
+  output$dataTable <- renderDT({
+    req(input$selectedDataset)
+    selected_name <- input$selectedDataset[1]  # Show first selected dataset
+    
+    req(selected_name %in% names(data_storage()))  # Ensure dataset exists
+    datatable(data_storage()[[selected_name]], options = list(scrollX = TRUE))
+  })
+  
+  
 
   adsl_df <-  reactive({ 
+    req(selected_data())
+    adsl2 <- data_storage()[['adsl']] |> rename_all(tolower)
+    req(adsl2)  # Ensure dataset exists
     req(input$subj)
     adsl2 %>% #rename_all(toupper) |> 
       filter(usubjid==input$subj)
@@ -136,6 +213,16 @@ server <- function(input, output, session) {
     })
   
   adae2 <-  reactive({ 
+    req(selected_data())
+
+    adae <- data_storage()[['adae']] %>% rename_all(tolower) %>% 
+      mutate(astdt=as.Date(astdt, format='%d%B%Y'),trtsdt=as.Date(trtsdt, format='%d%B%Y'),trtedt=as.Date(trtedt, format='%d%B%Y'), 
+             aendt2=ifelse((is.na(aendt) & astdt>=trtsdt & !is.na(trtedt)), trtedt, as.Date(aendt, format='%d%B%Y')),
+             aendt2=as.Date(aendt2, origin = "1970-01-01")) %>% 
+      select(usubjid, trtsdt, trtedt, astdt, aendt, aendt2, aedecod) %>% rename(content=aedecod, start=astdt, end=aendt)
+    
+    # usubjid <- unique(adae$usubjid)
+    
     req(input$subj)
     adae %>% filter(usubjid==input$subj) 
   })
@@ -226,32 +313,40 @@ server <- function(input, output, session) {
         yaxisl <- '%Change from Baseline'
       }
       
+      # Get unique ATPT values in a consistent order
+      atpt_levels <- advs1() %>% filter(param == input$para) %>% pull(atpt) %>% unique() %>% sort()
+      
+      N <- max(3, length(atpt_levels))  
+      colors <- setNames(brewer.pal(N, "Set2")[1:length(atpt_levels)], atpt_levels)  # Create a named vector of colors
+ 
+      
       # Initialize shapes list (empty by default)
       shapes_list <- list()
       
       # If checkbox is selected, add a baseline reference line
-      if (input$chkb & input$yaxis == 'aval') {
-        baseline <- advs1() %>% filter(ablfl == 'Y')
+      if (input$vchkb & input$yaxis == 'aval') {
+        baseline <- advs1() %>% filter(ablfl == 'Y') |> arrange(desc(atpt))
         
         if (nrow(baseline) > 0) {
           
-          shapes_list <- list(
+          # Create a list of reference lines for each group
+          shapes_list <- lapply(seq_along(unique(baseline$atpt)), function(i) {
+            group <- unique(baseline$atpt)[i]
+            baseline_value <- min(baseline |> arrange(atpt) %>% filter(atpt == group) %>% pull(input$yaxis), na.rm = TRUE)
+            
             list(
               type = "line",
-              x0 = 0,
-              x1 = 1,
-              y0 = baseline$base,
-              y1 = baseline$base,
+              y0 = baseline_value,
+              y1 = baseline_value,
+              x0 = 0,   # Spans the full width of the plot
+              x1 = 1,   # Spans the full width of the plot
               xref = "paper",
               yref = "y",
-              line = list(color = "red", width = 2, dash = "dash")
+              line = list(color =  colors[group], width = 2, dash = "dash")
             )
-          )
+          })
         }
       }
-      
-      N <- max(3, length(unique(advs1()$atpt)))
-      colors <- brewer.pal(N, "Set3")
       
       filtered_data <- advs1() %>% 
         filter(param == input$para)
@@ -286,6 +381,7 @@ server <- function(input, output, session) {
           )
           
         )
+      
       })
     
     output$advs2 <- renderDT({
@@ -327,7 +423,7 @@ server <- function(input, output, session) {
       shapes_list <- list()
       
       # If checkbox is selected, add a baseline reference line
-      if (input$chkb & input$lyaxis == 'aval') {
+      if (input$lchkb & input$lyaxis == 'aval') {
         baseline <- adlb1() %>% filter(ablfl == 'Y')
         
         if (nrow(baseline) > 0) {
