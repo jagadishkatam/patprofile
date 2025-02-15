@@ -71,7 +71,10 @@ ui <- fluidPage(
         mainPanel(
           tabsetPanel(
             id = 'dataset',
-            tabPanel("Data View", DTOutput("dataTable")),
+            tabPanel("Data View", 
+                     textInput("filter_val", tags$span("Enter Filter Expression (e.g., Age > 30 & Gender == 'M')", style = "font-weight: bold; color: red;") ), 
+                     varSelectInput("variables1", tags$span("Select Variables:", style = "font-weight: bold; color: red;"), NULL, multiple = TRUE), 
+                     DTOutput("dataTable")),
             tabPanel("ADSL", 
                      varSelectInput("variables", "Variable:", NULL, multiple = TRUE), 
                      DTOutput("dataset1")),
@@ -169,7 +172,10 @@ server <- function(input, output, session) {
   # 🔹 Reactive Expression for Selected Dataset
   selected_data <- reactive({
     req(input$selectedDataset)
-    data_storage()[['adsl']]  # Get first selected dataset
+    selected_name <- input$selectedDataset[1]  # Take the first selected dataset
+    
+    req(selected_name %in% names(data_storage()))  # Ensure dataset exists
+    data_storage()[[selected_name]]  # Get first selected dataset
   })
   
   # 🔹 Update USUBJID Dropdown When Dataset Changes
@@ -191,14 +197,50 @@ server <- function(input, output, session) {
                 choices = unique(selected_data()$USUBJID))
   })
   
+  observeEvent(selected_data(), {
+    req(selected_data())
+    updateVarSelectInput(session, "variables1",
+                         data  = selected_data()
+    )
+  })
+  
   # 🔹 Display First Selected Dataset in Data View
   output$dataTable <- renderDT({
-    req(input$selectedDataset)
-    selected_name <- input$selectedDataset[1]  # Show first selected dataset
+    req(selected_data())
+
+    filtered_data <- selected_data()
     
-    req(selected_name %in% names(data_storage()))  # Ensure dataset exists
-    datatable(data_storage()[[selected_name]], options = list(scrollX = TRUE))
+    if (!is.null(input$filter_val) && input$filter_val != "") {
+      tryCatch({
+        filtered_data <- filtered_data %>% filter(eval(parse(text = input$filter_val)))
+      }, error = function(e) {
+        showNotification("Invalid filter expression", type = "error")
+      })
+    }
+    
+    
+    if (length(input$variables1)==0) {
+      datatable(filtered_data |> rename_all(toupper),  # Use the full dataset without subsetting columns
+                options = list(
+                  scrollX = TRUE,  # Enable horizontal scrolling
+                  pageLength = 10  # Set number of rows per page
+                )
+      )
+    } else {
+      
+      datatable(filtered_data %>% 
+                  dplyr::select(!!!input$variables1) |> 
+                  rename_all(toupper),  # Use the full dataset without subsetting columns
+                options = list(
+                  scrollX = TRUE,  # Enable horizontal scrolling
+                  pageLength = 10  # Set number of rows per page
+                )
+      )
+    }
+    
+  
   })
+  
   
   
 
