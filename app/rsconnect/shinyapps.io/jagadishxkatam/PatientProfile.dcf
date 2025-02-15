@@ -1,0 +1,12 @@
+name: PatientProfile
+title: PatientProfile
+username: jagadishxkatam
+account: jagadishxkatam
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 14008135
+bundleId: 9804067
+url: https://jagadishxkatam.shinyapps.io/PatientProfile/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
