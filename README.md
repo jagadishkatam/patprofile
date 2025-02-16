@@ -1,4 +1,6 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+![GitHub release](https://img.shields.io/github/v/release/OWNER/REPO)
+
 
 # patprofile
 Patient Profile
