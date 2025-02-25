@@ -19,6 +19,9 @@ library(RColorBrewer)
 library(shinyFiles)
 library(bslib) 
 
+# pre-load data -----------------------------------------------------------
+
+
 preloaded_data <- list(
   'adsl' = tidyCDISC::adsl,
   'adae' = tidyCDISC::adae,
@@ -26,26 +29,45 @@ preloaded_data <- list(
   'advs' = tidyCDISC::advs
 )
 
-adae <- preloaded_data$adae
 
-adae <- adae %>% rename_all(tolower) %>% 
-  mutate(astdt=as.Date(astdt, format='%d%B%Y'),trtsdt=as.Date(trtsdt, format='%d%B%Y'),trtedt=as.Date(trtedt, format='%d%B%Y'), 
-         aendt2=ifelse((is.na(aendt) & astdt>=trtsdt & !is.na(trtedt)), trtedt, as.Date(aendt, format='%d%B%Y')),
-         aendt2=as.Date(aendt2, origin = "1970-01-01")) %>% 
-  select(usubjid, trtsdt, trtedt, astdt, aendt, aendt2, aedecod) %>% rename(content=aedecod, start=astdt, end=aendt)
+# adsl --------------------------------------------------------------------
 
-usubjid <- unique(adae$usubjid)
 
 adsl <- preloaded_data$adsl
 
-adsl2 <- adsl %>% rename_all(tolower) %>% mutate(id=row_number())
+adsl2 <- adsl %>% rename_all(tolower) %>% mutate(id=row_number())|> mutate(group=1)
 
-adae <- adae %>% filter(!is.na(start)) %>% mutate(id=row_number()) %>% filter(id<=1000)
+
+# adae --------------------------------------------------------------------
+
+
+adae <- preloaded_data$adae
+
+adae_data <- function(data){
+adae <- data %>% rename_all(tolower) %>% 
+  mutate(astdt=as.Date(astdt, format='%d%B%Y'),
+         trtsdt=as.Date(trtsdt, format='%d%B%Y'),
+         trtedt=as.Date(trtedt, format='%d%B%Y'), 
+         aendt2=ifelse((is.na(aendt) & astdt>=trtsdt & !is.na(trtedt)), trtedt, as.Date(aendt, format='%d%B%Y')),
+         aendt2=as.Date(aendt2, origin = "1970-01-01")) %>% 
+  select(usubjid, trtsdt, trtedt, astdt, aendt, aendt2, aedecod) %>% 
+  rename(content=aedecod, start=astdt, end=aendt) |> 
+  filter(!is.na(start)) %>% mutate(id=row_number()) #%>% filter(id<=1000)
+}
+
+adae <- adae_data(adae)
+
+usubjid <- unique(adae$usubjid)
+
+
+# advs --------------------------------------------------------------------
 
 advs <- preloaded_data$advs
 advs <- advs %>% rename_all(tolower) %>% filter(anl01fl=='Y')
 
 parvs <- unique(advs$param)
+
+# adlbc -------------------------------------------------------------------
 
 adlbc <- preloaded_data$adlbc
 adlbc <- adlbc %>% rename_all(tolower) 
@@ -74,7 +96,8 @@ ui <- fluidPage(
             tabPanel("Data View", 
                      textInput("filter_val", tags$span("Enter Filter Expression (e.g., Age > 30 & Gender == 'M')", style = "font-weight: bold; color: red;") ), 
                      varSelectInput("variables1", tags$span("Select Variables:", style = "font-weight: bold; color: red;"), NULL, multiple = TRUE), 
-                     DTOutput("dataTable")),
+                     DTOutput("dataTable"),
+                     downloadButton("downloadData", "Download")),
             tabPanel("ADSL", 
                      varSelectInput("variables", "Variable:", NULL, multiple = TRUE), 
                      DTOutput("dataset1")),
@@ -97,7 +120,7 @@ ui <- fluidPage(
             tabPanel("ADVS",  # Main tab
                      fluidRow(column(12, h4("ADVS Line Plot")),
                               column(12,
-                              tags$div(selectInput('para', 'Parameter', choices = parvs, selected = parvs[[1]]), style="display:inline-block"), 
+                              tags$div(selectInput('para', 'Parameter', choices = parvs, selected = parvs[[4]]), style="display:inline-block"), 
                               tags$div(selectInput('yaxis', 'Analysis Y Variable', choices = list('aval','chg', 'pchg')), style="display:inline-block") ,
                               tags$div(selectInput('xaxis', 'Analysis X Variable', choices = list('ady','visit', 'avisit')), style="display:inline-block"),
                               tags$div(checkboxInput("vchkb", tags$span("Baseline", style = "font-weight: bold; color: red;"), FALSE), style="display:inline-block"),
@@ -158,7 +181,7 @@ server <- function(input, output, session) {
     # 🔹 Force UI Refresh (Important!)
     updateCheckboxGroupInput(session, "selectedDataset",
                              choices = names(updated_data),
-                             selected = names(updated_data))
+                             selected = names(updated_data)[1])
   })
   
   # 🔹 Dynamic Checkboxes for Selecting Datasets
@@ -166,7 +189,7 @@ server <- function(input, output, session) {
     req(data_storage())
     checkboxGroupInput("selectedDataset", "Select Datasets:", 
                        choices = names(data_storage()), 
-                       selected = names(data_storage()))  # Auto-select all available datasets
+                       selected = names(data_storage())[1])  # Auto-select all available datasets
   })
   
   # 🔹 Reactive Expression for Selected Dataset
@@ -190,6 +213,8 @@ server <- function(input, output, session) {
                       selected = usubjid_list[1])
   })
   
+  
+  
   # 🔹 UI for Subject Selection
   output$subjSelector <- renderUI({
     req(selected_data())
@@ -200,7 +225,7 @@ server <- function(input, output, session) {
   observeEvent(selected_data(), {
     req(selected_data())
     updateVarSelectInput(session, "variables1",
-                         data  = selected_data()
+                         data  = selected_data()[1]
     )
   })
   
@@ -217,6 +242,23 @@ server <- function(input, output, session) {
         showNotification("Invalid filter expression", type = "error")
       })
     }
+    
+    
+    # The requested dataset
+    data_download <- reactive({
+      get(input$selectedDataset)
+    })
+    
+    output$downloadData <- downloadHandler(
+      filename = function() {
+        # Use the selected dataset as the suggested file name
+        paste0(input$selectedDataset, ".csv")
+      },
+      content = function(file) {
+        # Write the dataset to the `file` that will be downloaded
+        write.csv(data_download(), file)
+      }
+    )
     
     
     if (length(input$variables1)==0) {
@@ -250,24 +292,37 @@ server <- function(input, output, session) {
     req(adsl2)  # Ensure dataset exists
     req(input$subj)
     adsl2 %>% #rename_all(toupper) |> 
-      filter(usubjid==input$subj)
+      filter(usubjid==input$subj) |> mutate(group=1)
        
     })
+
+# adae server -------------------------------------------------------------
+
   
   adae2 <-  reactive({ 
     req(selected_data())
 
     adae <- data_storage()[['adae']] %>% rename_all(tolower) %>% 
-      mutate(astdt=as.Date(astdt, format='%d%B%Y'),trtsdt=as.Date(trtsdt, format='%d%B%Y'),trtedt=as.Date(trtedt, format='%d%B%Y'), 
-             aendt2=ifelse((is.na(aendt) & astdt>=trtsdt & !is.na(trtedt)), trtedt, as.Date(aendt, format='%d%B%Y')),
-             aendt2=as.Date(aendt2, origin = "1970-01-01")) %>% 
-      select(usubjid, trtsdt, trtedt, astdt, aendt, aendt2, aedecod) %>% rename(content=aedecod, start=astdt, end=aendt)
+      mutate(astdt=as.Date(astdt, format='%d%B%Y'),trtsdt=as.Date(trtsdt, format='%d%B%Y'),trtedt=as.Date(trtedt, format='%d%B%Y')
+             # aendt2=ifelse((is.na(aendt) & astdt>=trtsdt & !is.na(trtedt)), trtedt, as.Date(aendt, format='%d%B%Y')),
+             # aendt2=as.Date(aendt2, origin = "1970-01-01")
+             ) %>% 
+      select(usubjid, trtsdt, trtedt, astdt, aendt, #aendt2, 
+             aedecod) %>% rename(content=aedecod, start=astdt, end=aendt) |> 
+      mutate(group=2)
+    
+    
+    adsl3 <- adsl_df() |>  rename(content=trt01a, start=trtsdt, end=trtedt) |> mutate(style = c("color: red;background:yellow;"))
+    
+    adae <- bind_rows(adae,adsl3)
     
     # usubjid <- unique(adae$usubjid)
     
     req(input$subj)
     adae %>% filter(usubjid==input$subj) 
   })
+  
+  
   
   advs1 <-  reactive({ 
     req(input$subj)
@@ -323,14 +378,14 @@ server <- function(input, output, session) {
     
     output$plot <- renderTimevis({
       config <- list(
-        editable = TRUE,
+        editable = FALSE,
         align = "center",
         orientation = "top",
         snap = NULL,
         margin = list(item = 30, axis = 50)
       )
-      adae2 <- adae %>% filter(usubjid==input$subj)
-      timevis(adae2, zoomFactor = 1, options = config)
+      adae3 <- adae2() %>% filter(usubjid==input$subj)
+      timevis(adae3, zoomFactor = 1, options = config, groups = data.frame(id=c(1:2), content=c('Treatment', 'Adverse Events')))
     })
     
     output$plot2 <- renderPlotly({
@@ -426,10 +481,24 @@ server <- function(input, output, session) {
       
       })
     
+    # Reactive to capture the index of the clicked point.
+    selectedPointadvs <- reactiveVal(NULL)
+    
+    # Observe plotly_click events to update the selected point.
+    observeEvent(event_data("plotly_click"), {
+      clickData <- event_data("plotly_click")
+      if (!is.null(clickData)) {
+        # Plotly returns 0-indexed pointNumber. Convert to 1-indexed.
+        idx <- as.numeric(clickData$pointNumber) + 1  
+        # print(class(clickData$pointNumber))
+        selectedPointadvs(idx)
+      }
+    })
+    
     output$advs2 <- renderDT({
-      req(advs1())  # Ensure dataset exists
+      req(!is.null(selectedPointadvs()), advs1())  # Ensure dataset exists
       
-      datatable(advs1(),  # Use the full dataset without subsetting columns
+      datatable(advs1()[selectedPointadvs(),, drop=FALSE],  # Use the full dataset without subsetting columns
                 options = list(
                   scrollX = TRUE,  # Enable horizontal scrolling
                   pageLength = 10  # Set number of rows per page
@@ -508,12 +577,29 @@ server <- function(input, output, session) {
     })
     
 
+    
+    # Reactive to capture the index of the clicked point.
+    selectedPoint <- reactiveVal(NULL)
+    
+    # Observe plotly_click events to update the selected point.
+    observeEvent(event_data("plotly_click"), {
+      clickData <- event_data("plotly_click")
+      if (!is.null(clickData)) {
+        # Plotly returns 0-indexed pointNumber. Convert to 1-indexed.
+        idx <- as.numeric(clickData$pointNumber) + 1  
+        # print(class(clickData$pointNumber))
+        selectedPoint(idx)
+      }
+    })
+    
+
+    
       
     
     output$adlb2 <- renderDT({
-      req(adlb1())  # Ensure dataset exists
-      
-      datatable(adlb1(),  # Use the full dataset without subsetting columns
+      req(!is.null(selectedPoint()), adlb1())
+    
+      datatable(adlb1()[selectedPoint(), ,drop=FALSE],  # Use the full dataset without subsetting columns
                 options = list(
                   scrollX = TRUE,  # Enable horizontal scrolling
                   pageLength = 10  # Set number of rows per page
